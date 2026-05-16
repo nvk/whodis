@@ -21,6 +21,7 @@ class TextFormatter:
         ssl_info: Optional[Dict[str, Any]] = None,
         input_info: Optional[Dict[str, Any]] = None,
         meta: Optional[Dict[str, Any]] = None,
+        email_info: Optional[Dict[str, Any]] = None,
     ) -> str:
         sections = []
         if input_info:
@@ -28,6 +29,8 @@ class TextFormatter:
         sections.append(TextFormatter.format_registration(domain_whois))
         if dns_info:
             sections.append(TextFormatter.format_dns_records(dns_info))
+        if email_info:
+            sections.append(TextFormatter.format_email_info(email_info))
         if ip_info:
             sections.append(TextFormatter.format_ip_info(ip_info))
         if ssl_info:
@@ -137,6 +140,75 @@ class TextFormatter:
         dmarc_records = data.get("dmarc", {}).get("records") or []
         if dmarc_records:
             lines.append(label("DMARC", ", ".join(format_record_value(value) for value in dmarc_records)))
+        return "\n".join(lines)
+
+    @staticmethod
+    def format_email_info(data: Dict[str, Any]) -> str:
+        lines = [heading("Email Posture")]
+        if data.get("status") == "skipped":
+            return "\n".join(lines + [label("Status", "skipped")])
+
+        mx = data.get("mx", {})
+        if mx:
+            if mx.get("null_mx"):
+                mx_summary = "null MX (no inbound mail)"
+            elif mx.get("status") == "missing":
+                mx_summary = "missing"
+            else:
+                host_count = len(mx.get("hosts") or [])
+                mx_summary = f"{host_count} host{'s' if host_count != 1 else ''}"
+            lines.append(label("MX", mx_summary))
+            for host in mx.get("hosts") or []:
+                addresses = ", ".join(host.get("addresses") or []) or "no A/AAAA"
+                lines.append(f"  {host.get('host')}: {addresses}")
+            append_warning_lines(lines, mx.get("warnings"))
+
+        spf = data.get("spf", {})
+        if spf:
+            spf_summary = spf.get("status", "unknown")
+            if spf.get("dns_lookup_count") is not None:
+                spf_summary = f"{spf_summary}, {spf.get('dns_lookup_count')}/10 DNS lookups"
+            lines.append(label("SPF", spf_summary))
+            append_warning_lines(lines, spf.get("warnings"))
+
+        dmarc = data.get("dmarc", {})
+        if dmarc:
+            dmarc_parts = [dmarc.get("status", "unknown")]
+            if dmarc.get("policy"):
+                dmarc_parts.append(f"p={dmarc.get('policy')}")
+            if dmarc.get("subdomain_policy"):
+                dmarc_parts.append(f"sp={dmarc.get('subdomain_policy')}")
+            if dmarc.get("pct"):
+                dmarc_parts.append(f"pct={dmarc.get('pct')}")
+            alignment = dmarc.get("alignment") or {}
+            if alignment:
+                dmarc_parts.append(f"adkim={alignment.get('adkim')} aspf={alignment.get('aspf')}")
+            lines.append(label("DMARC", ", ".join(dmarc_parts)))
+            append_warning_lines(lines, dmarc.get("warnings"))
+
+        mta_sts = data.get("mta_sts", {})
+        if mta_sts:
+            policy = mta_sts.get("policy") or {}
+            mta_summary = mta_sts.get("status", "unknown")
+            if policy.get("mode"):
+                mta_summary = f"{mta_summary}, mode={policy.get('mode')}"
+            lines.append(label("MTA-STS", mta_summary))
+            append_warning_lines(lines, mta_sts.get("warnings"))
+
+        tls_rpt = data.get("tls_rpt", {})
+        if tls_rpt:
+            rua_count = len(tls_rpt.get("rua") or [])
+            tls_summary = tls_rpt.get("status", "unknown")
+            if rua_count:
+                tls_summary = f"{tls_summary}, {rua_count} rua"
+            lines.append(label("TLS-RPT", tls_summary))
+            append_warning_lines(lines, tls_rpt.get("warnings"))
+
+        bimi = data.get("bimi", {})
+        if bimi:
+            lines.append(label("BIMI", bimi.get("status", "unknown")))
+            append_warning_lines(lines, bimi.get("warnings"))
+
         return "\n".join(lines)
 
     @staticmethod
@@ -264,11 +336,13 @@ class JSONFormatter:
         ssl_info: Optional[Dict[str, Any]] = None,
         input_info: Optional[Dict[str, Any]] = None,
         meta: Optional[Dict[str, Any]] = None,
+        email_info: Optional[Dict[str, Any]] = None,
     ) -> str:
         payload: Dict[str, Any] = {
             "input": input_info or {},
             "registration": domain_whois,
             "dns": dns_info,
+            "email": email_info or {},
             "ip": ip_info,
             "tls": ssl_info or {},
             "http": redirect_info or {},
@@ -291,11 +365,13 @@ class CSVFormatter:
         ssl_info: Optional[Dict[str, Any]] = None,
         input_info: Optional[Dict[str, Any]] = None,
         meta: Optional[Dict[str, Any]] = None,
+        email_info: Optional[Dict[str, Any]] = None,
     ) -> str:
         payload = {
             "input": input_info or {},
             "registration": domain_whois,
             "dns": dns_info,
+            "email": email_info or {},
             "ip": ip_info,
             "tls": ssl_info or {},
             "http": redirect_info or {},
@@ -335,6 +411,11 @@ def label(name: str, value: Any) -> str:
 
 def warn(text: str) -> str:
     return f"{Fore.YELLOW}{text}{Style.RESET_ALL}"
+
+
+def append_warning_lines(lines: List[str], warnings: Optional[List[str]]) -> None:
+    for warning_text in warnings or []:
+        lines.append(f"  {warn(warning_text)}")
 
 
 def nested(data: Dict[str, Any], *keys: str) -> Any:

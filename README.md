@@ -1,8 +1,9 @@
 # whodis
 
 `whodis` is an RDAP-first domain intelligence CLI. It reports registration data,
-DNS records, IP ownership, TLS certificate state, and optional HTTP redirects as
-separate facts instead of blending them into one fragile WHOIS scrape.
+DNS records, email posture, IP ownership, TLS certificate state, and optional
+HTTP redirects as separate facts instead of blending them into one fragile WHOIS
+scrape.
 
 ## Features
 
@@ -11,6 +12,7 @@ separate facts instead of blending them into one fragile WHOIS scrape.
 - Optional `python-whois` and command-line WHOIS modes
 - DNS lookups for A, AAAA, CNAME, NS, MX, TXT, SOA, SRV, CAA, DS, DNSKEY, and reverse PTR
 - DMARC TXT discovery at `_dmarc.<domain>`
+- Email posture checks for MX, SPF, DMARC, MTA-STS, TLS-RPT, BIMI, and MX PTR coverage
 - IP RDAP lookups for resolved A/AAAA addresses
 - Optional command-line `dig`/`whois` lookup mode
 - TLS certificate inspection with verification state and expiry
@@ -40,6 +42,7 @@ whodis --output result.json --format json example.com
 
 # Skip sections
 whodis --no-dns example.com
+whodis --no-email example.com
 whodis --no-ip example.com
 whodis --no-tls example.com
 

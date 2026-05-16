@@ -11,6 +11,7 @@ import click
 from whois_tool import __version__
 from whois_tool.dns_resolver import get_all_dns_info
 from whois_tool.domain_info import get_domain_whois
+from whois_tool.email_info import get_email_info
 from whois_tool.formatters import get_formatter, output_result
 from whois_tool.ip_info import get_ip_info_for_domain
 from whois_tool.rdap import utc_now_iso
@@ -33,6 +34,7 @@ logger = logging.getLogger("whodis")
 )
 @click.option("--output", "-o", type=click.Path(), help="Output file. Defaults to stdout.")
 @click.option("--no-dns", is_flag=True, help="Skip DNS lookups.")
+@click.option("--no-email", is_flag=True, help="Skip email posture checks.")
 @click.option("--no-ip", is_flag=True, help="Skip IP RDAP lookups for resolved addresses.")
 @click.option("--no-tls", "--no-ssl", is_flag=True, help="Skip TLS certificate inspection.")
 @click.option("--no-whois-fallback", is_flag=True, help="Do not fall back to legacy WHOIS when RDAP fails.")
@@ -49,6 +51,7 @@ def main(
     output_format: str,
     output: Optional[str],
     no_dns: bool,
+    no_email: bool,
     no_ip: bool,
     no_tls: bool,
     no_whois_fallback: bool,
@@ -60,7 +63,7 @@ def main(
     use_command_line: bool,
     verbose: int,
 ) -> None:
-    """Inspect domain registration, DNS, IP ownership, TLS, and redirects."""
+    """Inspect domain registration, DNS, email posture, IP ownership, TLS, and redirects."""
     configure_logging(verbose)
 
     if os.environ.get("WHODIS_NO_SPINNER"):
@@ -98,6 +101,16 @@ def main(
             with maybe_spinner(f"Getting DNS records for {domain}...", no_spinner):
                 dns_info = get_all_dns_info(domain, use_library=dns_ip_use_library, timeout=timeout)
 
+        email_info = {"domain": domain, "status": "skipped"}
+        if not no_email and not no_dns:
+            with maybe_spinner(f"Checking email posture for {domain}...", no_spinner):
+                email_info = get_email_info(
+                    domain,
+                    dns_info=dns_info,
+                    use_library=dns_ip_use_library,
+                    timeout=timeout,
+                )
+
         ip_info = {"domain": domain, "status": "skipped", "addresses": {}}
         if not no_ip and dns_info.get("ip_addresses"):
             with maybe_spinner(f"Getting IP ownership for {domain}...", no_spinner):
@@ -127,6 +140,7 @@ def main(
             tls_info,
             input_info=normalized,
             meta=meta,
+            email_info=email_info,
         )
         output_result(rendered, output)
     except Exception as exc:

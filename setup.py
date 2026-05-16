@@ -12,7 +12,7 @@ setup(
     name="whodis",
     version=__version__,
     author="nvk",
-    description="RDAP-first domain intelligence CLI with DNS, IP, TLS, and redirect checks",
+    description="RDAP-first domain intelligence CLI with DNS, email, IP, TLS, and redirect checks",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/nvk/whodis",
