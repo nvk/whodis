@@ -63,7 +63,7 @@ class TextFormatter:
             compact_lines(
                 [
                     label("Domain", data.get("domain")),
-                    label("Registrar", nested(data, "registrar", "name")),
+                    label("Registrar", registrar_name(data)),
                     label("IANA Registrar ID", nested(data, "registrar", "iana_id")),
                     label("Created", data.get("created")),
                     label("Expires", data.get("expires")),
@@ -78,12 +78,43 @@ class TextFormatter:
             lines.append(label("Domain Status", ", ".join(data["statuses"])))
         if data.get("nameservers"):
             lines.append(label("Nameservers", ", ".join(data["nameservers"])))
+        raw_fields = data.get("raw_fields") or {}
+        if raw_fields:
+            lines.extend(TextFormatter.format_extra_whois_fields(raw_fields))
         if data.get("secure_dns"):
             signed = data["secure_dns"].get("delegationSigned")
             lines.append(label("DNSSEC", "signed" if signed else "not signed"))
         if data.get("redacted"):
             lines.append(label("Redaction", "RDAP response indicates redacted fields"))
         return "\n".join(lines)
+
+    @staticmethod
+    def format_extra_whois_fields(data: Dict[str, Any]) -> List[str]:
+        field_names = [
+            "whois_server",
+            "dnssec",
+            "emails",
+            "name",
+            "org",
+            "address",
+            "city",
+            "state",
+            "registrant_postal_code",
+            "country",
+            "registrant_name",
+            "registrant_organization",
+            "admin_name",
+            "admin_email",
+            "tech_name",
+            "tech_email",
+        ]
+        lines = []
+        for field in field_names:
+            value = data.get(field)
+            if value in (None, "", []):
+                continue
+            lines.append(label(field.replace("_", " ").title(), format_list_value(value)))
+        return lines
 
     @staticmethod
     def format_dns_records(data: Dict[str, Any]) -> str:
@@ -95,8 +126,14 @@ class TextFormatter:
             return "\n".join(lines + [warn("No DNS records found")])
 
         for record_type, values in records.items():
-            rendered = ", ".join(format_record_value(value) for value in values)
-            lines.append(label(record_type, rendered))
+            if record_type == "PTR" and isinstance(values, dict):
+                lines.append(label("PTR", "reverse DNS"))
+                for ip, ptr_values in values.items():
+                    lines.append(f"  {ip}: {', '.join(format_record_value(value) for value in ptr_values)}")
+                continue
+            lines.append(label(record_type, ""))
+            for value in values:
+                lines.append(f"  - {format_record_value(value)}")
         dmarc_records = data.get("dmarc", {}).get("records") or []
         if dmarc_records:
             lines.append(label("DMARC", ", ".join(format_record_value(value) for value in dmarc_records)))
@@ -113,14 +150,22 @@ class TextFormatter:
             if info.get("status") != "ok":
                 lines.append(label(ip, info.get("error", info.get("status"))))
                 continue
-            parts = [
-                info.get("hosting_provider"),
-                info.get("organization"),
-                f"AS{info.get('asn')}" if info.get("asn") else None,
-                info.get("network_cidr"),
-                info.get("country"),
-            ]
-            lines.append(label(ip, " | ".join(str(part) for part in parts if part)))
+            lines.append(label(ip, info.get("hosting_provider") or info.get("organization") or "resolved"))
+            for field, display in [
+                ("organization", "Organization"),
+                ("network_name", "Network Name"),
+                ("asn", "ASN"),
+                ("asn_description", "ASN Description"),
+                ("network_cidr", "Network CIDR"),
+                ("network_start_address", "Network Start"),
+                ("network_end_address", "Network End"),
+                ("country", "Country"),
+            ]:
+                value = info.get(field)
+                if value:
+                    if field == "asn" and not str(value).startswith("AS"):
+                        value = f"AS{value}"
+                    lines.append(f"  {display}: {value}")
         return "\n".join(lines)
 
     @staticmethod
@@ -137,13 +182,18 @@ class TextFormatter:
                     label("Verified", str(data.get("verified")).lower()),
                     label("Common Name", data.get("common_name")),
                     label("Issuer", data.get("issuer_organization") or data.get("issuer_common_name")),
+                    label("Organization", data.get("organization")),
+                    label("Organizational Unit", data.get("organizational_unit")),
                     label("Valid Until", data.get("valid_until")),
                     label("Days Remaining", data.get("days_remaining")),
                     label("TLS Version", data.get("tls_version")),
                     label("Cipher", data.get("cipher")),
+                    label("SHA256 Fingerprint", data.get("fingerprint_sha256")),
                 ]
             )
         )
+        if data.get("subject_alt_names"):
+            lines.append(label("Subject Alt Names", ", ".join(data["subject_alt_names"])))
         if data.get("verification_error"):
             lines.append(warn(data["verification_error"]))
         return "\n".join(lines)
@@ -151,6 +201,13 @@ class TextFormatter:
     @staticmethod
     def format_redirect_info(data: Dict[str, Any]) -> str:
         lines = [heading("HTTP")]
+        if data.get("protocols"):
+            for scheme in ("https", "http"):
+                protocol_data = data["protocols"].get(scheme)
+                if protocol_data:
+                    lines.extend(TextFormatter.format_single_redirect(scheme.upper(), protocol_data))
+            return "\n".join(lines)
+
         lines.append(label("Status", data.get("status")))
         if data.get("error") and data.get("status") != "ok":
             lines.append(warn(data["error"]))
@@ -168,6 +225,29 @@ class TextFormatter:
         if data.get("redirect_chain"):
             lines.append(label("Chain", " -> ".join(data["redirect_chain"])))
         return "\n".join(lines)
+
+    @staticmethod
+    def format_single_redirect(name: str, data: Dict[str, Any]) -> List[str]:
+        lines = [label(name, data.get("status"))]
+        if data.get("error") and data.get("status") != "ok":
+            lines.append(f"  Error: {data['error']}")
+            return lines
+        lines.extend(
+            compact_lines(
+                [
+                    f"  Method: {data.get('method')}",
+                    f"  Initial URL: {data.get('initial_url')}",
+                    f"  Final URL: {data.get('final_url')}",
+                    f"  Status Code: {data.get('status_code')}",
+                    f"  Redirects: {str(data.get('redirects')).lower()}",
+                    f"  Redirect Count: {data.get('redirect_count')}",
+                    f"  Domain Changed: {str(data.get('domain_changed')).lower()}",
+                ]
+            )
+        )
+        if data.get("redirect_chain"):
+            lines.append(f"  Chain: {' -> '.join(data['redirect_chain'])}")
+        return lines
 
     @staticmethod
     def format_redirect_only(data: Dict[str, Any]) -> str:
@@ -264,6 +344,21 @@ def nested(data: Dict[str, Any], *keys: str) -> Any:
             return None
         current = current.get(key)
     return current
+
+
+def registrar_name(data: Dict[str, Any]) -> Any:
+    registrar = data.get("registrar")
+    if isinstance(registrar, dict):
+        return registrar.get("name")
+    return registrar
+
+
+def format_list_value(value: Any) -> str:
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value)
+    if isinstance(value, tuple):
+        return ", ".join(str(item) for item in value)
+    return str(value)
 
 
 def compact_lines(lines: Iterable[Optional[str]]) -> List[str]:

@@ -1,5 +1,8 @@
 import unittest
+from datetime import datetime, timezone
+from unittest.mock import patch
 
+from whois_tool.domain_info import get_domain_whois_python_whois
 from whois_tool.rdap import build_rdap_url, find_matching_rdap_services, summarize_rdap_domain
 from whois_tool.utils import normalize_domain_input
 
@@ -81,6 +84,32 @@ class DomainRdapTests(unittest.TestCase):
         self.assertEqual(summary["created"], "1995-08-14T04:00:00Z")
         self.assertEqual(summary["expires"], "2026-08-13T04:00:00Z")
         self.assertEqual(summary["nameservers"], ["NS1.EXAMPLE.COM"])
+
+    def test_python_whois_result_is_normalized_without_losing_fields(self):
+        class FakeWhoisClient:
+            @staticmethod
+            def whois(domain):
+                return {
+                    "domain_name": "EXAMPLE.COM",
+                    "registrar": "Example Registrar",
+                    "creation_date": datetime(1995, 8, 14, tzinfo=timezone.utc),
+                    "expiration_date": [datetime(2026, 8, 13, tzinfo=timezone.utc)],
+                    "updated_date": None,
+                    "name_servers": ["NS1.EXAMPLE.COM"],
+                    "status": ["client transfer prohibited"],
+                    "emails": ["abuse@example.test"],
+                }
+
+        with patch("whois_tool.domain_info.python_whois", FakeWhoisClient):
+            result = get_domain_whois_python_whois("example.com")
+
+        self.assertEqual(result["status"], "ok")
+        self.assertEqual(result["source"], "python-whois")
+        self.assertEqual(result["registrar"], "Example Registrar")
+        self.assertEqual(result["created"], "1995-08-14T00:00:00+00:00")
+        self.assertEqual(result["expires"], ["2026-08-13T00:00:00+00:00"])
+        self.assertEqual(result["statuses"], ["client transfer prohibited"])
+        self.assertEqual(result["raw_fields"]["emails"], ["abuse@example.test"])
 
 
 if __name__ == "__main__":

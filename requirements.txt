@@ -1,3 +1,4 @@
+python-whois>=0.9.6
 dnspython>=2.1.0
 ipwhois>=1.2.0
 colorama>=0.4.4

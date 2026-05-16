@@ -4,6 +4,7 @@ import logging
 import re
 import socket
 import ssl
+import subprocess
 import tempfile
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -12,6 +13,28 @@ import idna
 import requests
 
 logger = logging.getLogger("whodis")
+
+
+def execute_shell_command(command: List[str], timeout: int = 10) -> str:
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except FileNotFoundError:
+        return f"ERROR: command not found: {command[0]}"
+    except subprocess.TimeoutExpired:
+        return f"ERROR: command timed out after {timeout}s"
+    except Exception as exc:
+        return f"ERROR: {exc}"
+
+    output = completed.stdout or completed.stderr
+    if completed.returncode != 0 and not output:
+        return f"ERROR: command exited {completed.returncode}"
+    return output
 
 
 def normalize_domain_input(value: str) -> Dict[str, Any]:
@@ -106,39 +129,108 @@ def check_domain_redirect(domain: str, timeout: int = 5, max_redirects: int = 5)
         "status": "not_checked",
         "redirects": False,
         "redirect_chain": [],
+        "protocols": {},
     }
 
+    protocol_results = check_domain_redirects(domain, timeout=timeout, max_redirects=max_redirects)
+    result["protocols"] = protocol_results
+
+    preferred = None
+    for scheme in ("https", "http"):
+        candidate = protocol_results.get(scheme)
+        if candidate and candidate.get("status") == "ok":
+            preferred = candidate
+            break
+
+    if preferred:
+        result.update(preferred)
+        result["status"] = "ok"
+        return result
+
+    for scheme in ("https", "http"):
+        candidate = protocol_results.get(scheme)
+        if candidate:
+            result.update(
+                {
+                    "status": candidate.get("status", "error"),
+                    "initial_url": candidate.get("url"),
+                    "error": candidate.get("error"),
+                }
+            )
+            break
+
+    return result
+
+
+def check_domain_redirects(domain: str, timeout: int = 5, max_redirects: int = 5) -> Dict[str, Dict[str, Any]]:
+    return {
+        scheme: check_url_redirects(f"{scheme}://{domain}", timeout=timeout, max_redirects=max_redirects)
+        for scheme in ("https", "http")
+    }
+
+
+def check_url_redirects(url: str, timeout: int = 5, max_redirects: int = 5) -> Dict[str, Any]:
     session = requests.Session()
     session.max_redirects = max_redirects
     headers = {"User-Agent": "whodis/0.2"}
 
-    for scheme in ("https", "http"):
-        url = f"{scheme}://{domain}"
+    response = None
+    method = "HEAD"
+    try:
+        response = session.head(url, timeout=timeout, allow_redirects=True, headers=headers)
+        if response.status_code >= 400:
+            response = None
+    except requests.RequestException:
+        response = None
+
+    if response is None:
+        method = "GET"
         try:
-            response = session.get(url, timeout=timeout, allow_redirects=True, headers=headers, stream=True)
+            response = session.get(url, timeout=max(timeout / 2, 1), allow_redirects=True, headers=headers, stream=True)
             response.close()
         except requests.TooManyRedirects as exc:
-            result.update({"status": "too_many_redirects", "initial_url": url, "error": str(exc)})
-            return result
+            return _redirect_error(url, "too_many_redirects", str(exc))
+        except requests.Timeout:
+            return _redirect_error(url, "timeout", "request timed out")
+        except requests.ConnectionError:
+            return _redirect_error(url, "connection_error", "connection error")
         except requests.RequestException as exc:
-            result.update({"status": "error", "initial_url": url, "error": str(exc)})
-            continue
+            return _redirect_error(url, "error", str(exc))
 
-        history = [item.url for item in response.history]
-        result.update(
-            {
-                "status": "ok",
-                "initial_url": url,
-                "final_url": response.url,
-                "status_code": response.status_code,
-                "redirects": bool(history),
-                "redirect_chain": history,
-                "domain_changed": urlparse(url).netloc != urlparse(response.url).netloc,
-            }
-        )
-        return result
+    history = [item.url for item in response.history]
+    original_domain = urlparse(url).netloc
+    final_domain = urlparse(response.url).netloc
+    return {
+        "status": "ok",
+        "method": method,
+        "url": url,
+        "initial_url": url,
+        "final_url": response.url,
+        "status_code": response.status_code,
+        "redirects": bool(history),
+        "redirect_chain": history,
+        "redirect_count": len(history),
+        "domain_changed": original_domain != final_domain,
+        "initial_domain": original_domain,
+        "final_domain": final_domain,
+    }
 
-    return result
+
+def _redirect_error(url: str, status: str, error: str) -> Dict[str, Any]:
+    return {
+        "status": status,
+        "url": url,
+        "initial_url": url,
+        "final_url": None,
+        "status_code": None,
+        "redirects": False,
+        "redirect_chain": [],
+        "redirect_count": 0,
+        "domain_changed": False,
+        "initial_domain": urlparse(url).netloc,
+        "final_domain": None,
+        "error": error,
+    }
 
 
 def get_ssl_certificate_info(domain: str, timeout: int = 5, port: int = 443) -> Dict[str, Any]:
@@ -207,6 +299,8 @@ def _format_certificate(cert: Dict[str, Any]) -> Dict[str, Any]:
         "subject": subject,
         "issuer": issuer,
         "common_name": subject.get("commonName"),
+        "organization": subject.get("organizationName"),
+        "organizational_unit": subject.get("organizationalUnitName"),
         "issuer_common_name": issuer.get("commonName"),
         "issuer_organization": issuer.get("organizationName"),
         "valid_from": cert.get("notBefore"),

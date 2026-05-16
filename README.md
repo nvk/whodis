@@ -8,11 +8,13 @@ separate facts instead of blending them into one fragile WHOIS scrape.
 
 - RDAP-first registration lookup using IANA bootstrap data
 - Legacy WHOIS fallback for TLDs without usable RDAP
-- DNS lookups for A, AAAA, CNAME, NS, MX, TXT, SOA, CAA, DS, and DNSKEY
+- Optional `python-whois` and command-line WHOIS modes
+- DNS lookups for A, AAAA, CNAME, NS, MX, TXT, SOA, SRV, CAA, DS, DNSKEY, and reverse PTR
 - DMARC TXT discovery at `_dmarc.<domain>`
 - IP RDAP lookups for resolved A/AAAA addresses
+- Optional command-line `dig`/`whois` lookup mode
 - TLS certificate inspection with verification state and expiry
-- Optional HTTP/HTTPS redirect checking
+- Optional HTTP/HTTPS redirect checking with per-protocol details
 - Text, JSON, and CSV output
 
 ## Installation
@@ -43,6 +45,12 @@ whodis --no-tls example.com
 
 # Force legacy WHOIS instead of RDAP
 whodis --whois example.com
+
+# Use python-whois as the registration source
+whodis --python-whois example.com
+
+# Use command-line tools for WHOIS, DNS, and IP lookups
+whodis --use-command-line example.com
 ```
 
 ## Notes

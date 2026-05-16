@@ -36,11 +36,12 @@ logger = logging.getLogger("whodis")
 @click.option("--no-ip", is_flag=True, help="Skip IP RDAP lookups for resolved addresses.")
 @click.option("--no-tls", "--no-ssl", is_flag=True, help="Skip TLS certificate inspection.")
 @click.option("--no-whois-fallback", is_flag=True, help="Do not fall back to legacy WHOIS when RDAP fails.")
-@click.option("--whois", "force_whois", is_flag=True, help="Use legacy WHOIS instead of RDAP.")
+@click.option("--whois", "force_whois", is_flag=True, help="Use the legacy WHOIS command instead of RDAP.")
+@click.option("--python-whois", is_flag=True, help="Use the python-whois library as the registration source.")
 @click.option("--timeout", type=int, default=10, show_default=True, help="Per-section timeout in seconds.")
 @click.option("--check-redirect", is_flag=True, help="Check HTTP/HTTPS redirects.")
 @click.option("--no-spinner", is_flag=True, help="Disable the loading spinner.")
-@click.option("--use-command-line", is_flag=True, help="Deprecated alias for --whois.")
+@click.option("--use-command-line", is_flag=True, help="Use command-line tools for WHOIS, DNS, and IP lookups.")
 @click.option("--verbose", "-v", count=True, help="Increase verbosity.")
 @click.version_option(__version__, prog_name="whodis")
 def main(
@@ -52,6 +53,7 @@ def main(
     no_tls: bool,
     no_whois_fallback: bool,
     force_whois: bool,
+    python_whois: bool,
     timeout: int,
     check_redirect: bool,
     no_spinner: bool,
@@ -72,7 +74,8 @@ def main(
         sys.exit(1)
 
     domain = normalized["domain"]
-    use_rdap = not (force_whois or use_command_line)
+    dns_ip_use_library = not use_command_line
+    registration_use_library = not (force_whois or use_command_line)
     meta = {
         "tool": "whodis",
         "version": __version__,
@@ -84,20 +87,26 @@ def main(
         with maybe_spinner(f"Getting registration data for {domain}...", no_spinner):
             registration = get_domain_whois(
                 domain,
-                use_library=use_rdap,
+                use_library=registration_use_library,
                 timeout=timeout,
                 allow_legacy_whois=not no_whois_fallback,
+                prefer_python_whois=python_whois,
             )
 
         dns_info = {"domain": domain, "status": "skipped", "records": {}, "queries": {}}
         if not no_dns:
             with maybe_spinner(f"Getting DNS records for {domain}...", no_spinner):
-                dns_info = get_all_dns_info(domain, timeout=timeout)
+                dns_info = get_all_dns_info(domain, use_library=dns_ip_use_library, timeout=timeout)
 
         ip_info = {"domain": domain, "status": "skipped", "addresses": {}}
         if not no_ip and dns_info.get("ip_addresses"):
             with maybe_spinner(f"Getting IP ownership for {domain}...", no_spinner):
-                ip_info = get_ip_info_for_domain(domain, dns_info.get("ip_addresses", []), timeout=timeout)
+                ip_info = get_ip_info_for_domain(
+                    domain,
+                    dns_info.get("ip_addresses", []),
+                    use_library=dns_ip_use_library,
+                    timeout=timeout,
+                )
 
         tls_info = {"domain": domain, "status": "skipped", "has_tls": False}
         if not no_tls:
