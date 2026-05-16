@@ -1,0 +1,6 @@
+dnspython>=2.1.0
+ipwhois>=1.2.0
+colorama>=0.4.4
+click>=8.0.0
+requests>=2.25.1
+idna>=3.6
